@@ -1,0 +1,483 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chillibon: Битва с Саней</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 20px;
+    display: flex; justify-content: center; align-items: center;
+    background: #11102b; color: white;
+    font-family: Arial, sans-serif;
+  }
+  main { width: min(960px, 100%); text-align: center; }
+  h1 { color: #c5a3ff; margin: 0 0 8px; font-size: 36px; }
+  .hud {
+    display: flex; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px; margin: 12px 0;
+    background: #201d48; padding: 12px; border-radius: 12px;
+  }
+  canvas {
+    display: block; width: 100%; height: auto;
+    background: #252654; border: 3px solid #8d79ff;
+    border-radius: 12px; image-rendering: pixelated;
+  }
+  .hint { color: #d6d0ff; line-height: 1.6; }
+  button {
+    background: #8d79ff; color: white; border: 0;
+    border-radius: 9px; padding: 11px 18px;
+    font-size: 15px; font-weight: bold; cursor: pointer;
+  }
+  button:hover { background: #a99aff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🐾 Chillibon</h1>
+  <div class="hud">
+    <span>🐟 Рыбки: <b id="fish">0</b></span>
+    <span>⭐ Уровень: <b id="level">1</b></span>
+    <span>💗 Здоровье: <b id="hp">5</b></span>
+    <span id="bossHud">❄️ Собирай рыбок!</span>
+  </div>
+  <canvas id="game" width="900" height="500"></canvas>
+  <p class="hint">
+    ← → или A/D — движение · Пробел / ↑ — прыжок<br>
+    E — бросить рыбку в Саню · Собери 5 рыбок, чтобы вызвать босса!
+  </p>
+  <button onclick="restart()">🔄 Начать заново</button>
+</main>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const W = canvas.width, H = canvas.height;
+
+const platforms = [
+  {x:0, y:450, w:900, h:50},
+  {x:130, y:370, w:150, h:16},
+  {x:340, y:305, w:150, h:16},
+  {x:550, y:370, w:130, h:16},
+  {x:700, y:290, w:130, h:16}
+];
+
+let keys = {};
+let player, fish, shots, boss, score, level, hp;
+let mode, invincible, attackCooldown, message, messageTime;
+let frame = 0;
+
+function restart() {
+  player = {
+    x: 45, y: 390, w: 36, h: 48,
+    vx: 0, vy: 0, grounded: false
+  };
+  fish = [
+    {x:185,y:335,taken:false},
+    {x:260,y:335,taken:false},
+    {x:390,y:270,taken:false},
+    {x:455,y:270,taken:false},
+    {x:595,y:335,taken:false},
+    {x:740,y:255,taken:false},
+    {x:800,y:255,taken:false},
+    {x:500,y:415,taken:false}
+  ];
+  shots = [];
+  boss = {
+    x: 760, y: 350, w: 65, h: 100,
+    hp: 10, maxHp: 10, active: false,
+    direction: -1, attackTimer: 100
+  };
+  score = 0; level = 1; hp = 5;
+  mode = "play";
+  invincible = 0;
+  attackCooldown = 0;
+  message = "";
+  messageTime = 0;
+  updateHud();
+}
+
+function updateHud() {
+  document.getElementById("fish").textContent = score;
+  document.getElementById("level").textContent = level;
+  document.getElementById("hp").textContent = hp;
+  document.getElementById("bossHud").textContent =
+    boss.active ? "😈 Саня: " + boss.hp + "/" + boss.maxHp :
+    score >= 5 ? "⚠️ Босс приближается!" : "❄️ Собирай рыбок!";
+}
+
+document.addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if (["arrowleft","arrowright","arrowup"," "].includes(k)) e.preventDefault();
+  keys[k] = true;
+
+  if (!e.repeat && mode === "play") {
+    if ((k === " " || k === "arrowup" || k === "w") && player.grounded) {
+      player.vy = -12;
+      player.grounded = false;
+    }
+    if (k === "e") throwFish();
+  }
+});
+document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+function throwFish() {
+  if (!boss.active || attackCooldown > 0 || score < 1) return;
+  score--;
+  attackCooldown = 25;
+  shots.push({
+    x: player.x + player.w,
+    y: player.y + 20,
+    vx: player.x < boss.x ? 7 : -7
+  });
+  updateHud();
+}
+
+function say(text) {
+  message = text;
+  messageTime = 110;
+}
+
+function update() {
+  frame++;
+  if (mode !== "play") return;
+  if (invincible > 0) invincible--;
+  if (attackCooldown > 0) attackCooldown--;
+  if (messageTime > 0) messageTime--;
+
+  player.vx = 0;
+  if (keys.arrowleft || keys.a) player.vx = -4;
+  if (keys.arrowright || keys.d) player.vx = 4;
+
+  player.x += player.vx;
+  player.x = Math.max(0, Math.min(W - player.w, player.x));
+
+  player.vy += 0.55;
+  const oldBottom = player.y + player.h;
+  player.y += player.vy;
+  player.grounded = false;
+
+  for (const p of platforms) {
+    if (player.vy >= 0 &&
+        player.x + player.w > p.x &&
+        player.x < p.x + p.w &&
+        oldBottom <= p.y + 4 &&
+        player.y + player.h >= p.y) {
+      player.y = p.y - player.h;
+      player.vy = 0;
+      player.grounded = true;
+    }
+  }
+
+  if (player.y > H + 80) {
+    hp--;
+    player.x = 40;
+    player.y = 350;
+    player.vy = 0;
+    invincible = 80;
+    updateHud();
+  }
+
+  for (const f of fish) {
+    if (!f.taken &&
+        player.x < f.x + 14 && player.x + player.w > f.x - 14 &&
+        player.y < f.y + 14 && player.y + player.h > f.y - 14) {
+      f.taken = true;
+      score++;
+      const newLevel = 1 + Math.floor(score / 3);
+      if (newLevel > level) {
+        level = newLevel;
+        say("Уровень повышен! Ура! ⭐");
+        hp = Math.min(5, hp + 1);
+      }
+      updateHud();
+    }
+  }
+
+  if (score >= 5 && !boss.active) {
+    boss.active = true;
+    say("САНЯ ПОЯВИЛСЯ! БРОСАЙ РЫБКИ КЛАВИШЕЙ E!");
+    updateHud();
+  }
+
+  if (boss.active) {
+    boss.attackTimer--;
+    if (boss.attackTimer <= 0) {
+      boss.attackTimer = 100;
+      const dir = player.x < boss.x ? -1 : 1;
+      boss.direction = dir;
+      boss.x += dir * 65;
+      boss.x = Math.max(620, Math.min(815, boss.x));
+      if (Math.abs(player.x - boss.x) < 70 &&
+          Math.abs(player.y - boss.y) < 90 && invincible === 0) {
+        hp--;
+        invincible = 90;
+        say("Саня тебя задел! Осторожно!");
+        updateHud();
+      }
+    }
+
+    for (const s of shots) {
+      s.x += s.vx;
+      if (s.x < boss.x + boss.w && s.x + 20 > boss.x &&
+          s.y < boss.y + boss.h && s.y + 12 > boss.y) {
+        s.hit = true;
+        boss.hp--;
+        say("Попадание! 💥");
+        if (boss.hp <= 0) {
+          boss.hp = 0;
+          mode = "win";
+          say("САНЯ ПОБЕЖДЁН!");
+        }
+      }
+    }
+    shots = shots.filter(s => !s.hit && s.x > -30 && s.x < W + 30);
+  }
+
+  if (hp <= 0) mode = "lose";
+  updateHud();
+}
+
+function drawCat(x, y) {
+  // Хвост
+  ctx.strokeStyle = "#151522";
+  ctx.lineWidth = 10;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x + 8, y + 35);
+  ctx.quadraticCurveTo(x - 12, y + 25, x + 1, y + 15);
+  ctx.stroke();
+
+  // Уши
+  ctx.fillStyle = "#171722";
+  ctx.beginPath();
+  ctx.moveTo(x+3,y+12); ctx.lineTo(x+5,y-3);
+  ctx.lineTo(x+17,y+7); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x+19,y+7); ctx.lineTo(x+32,y-3);
+  ctx.lineTo(x+34,y+15); ctx.fill();
+
+  // Тело
+  ctx.fillStyle = "#171722";
+  ctx.beginPath(); ctx.ellipse(x+19,y+33,17,18,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#f8f5ff";
+  ctx.beginPath(); ctx.ellipse(x+19,y+37,10,12,0,0,Math.PI*2); ctx.fill();
+
+  // Голова
+  ctx.fillStyle = "#171722";
+  ctx.beginPath(); ctx.ellipse(x+19,y+15,18,16,0,0,Math.PI*2); ctx.fill();
+
+  // Белая мордочка
+  ctx.fillStyle = "#fffaff";
+  ctx.beginPath(); ctx.ellipse(x+19,y+23,11,7,0,0,Math.PI*2); ctx.fill();
+
+  // Жёлтые глаза
+  ctx.fillStyle = "#ffdf42";
+  ctx.beginPath(); ctx.ellipse(x+12,y+14,4,5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x+26,y+14,4,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#151522";
+  ctx.fillRect(x+12,y+13,2,4); ctx.fillRect(x+26,y+13,2,4);
+
+  // Носик
+  ctx.fillStyle = "#ff8eae";
+  ctx.beginPath(); ctx.arc(x+19,y+22,2,0,Math.PI*2); ctx.fill();
+
+  // Белые кончики лап
+  ctx.fillStyle = "#fffaff";
+  ctx.fillRect(x+5,y+43,9,5);
+  ctx.fillRect(x+24,y+43,9,5);
+}
+
+function drawSanya() {
+  const x = boss.x, y = boss.y;
+
+  // Чёрные трико
+  ctx.fillStyle = "#11111b";
+  ctx.fillRect(x+9,y+58,20,42);
+  ctx.fillRect(x+34,y+58,20,42);
+
+  // Кроссовки
+  ctx.fillStyle = "#dedbea";
+  ctx.fillRect(x+4,y+93,27,9);
+  ctx.fillRect(x+30,y+93,29,9);
+
+  // Белая футболка
+  ctx.fillStyle = "#f5f3fa";
+  ctx.fillRect(x+5,y+28,56,36);
+  ctx.fillRect(x-1,y+32,14,24);
+  ctx.fillRect(x+53,y+32,14,24);
+
+  // Шея
+  ctx.fillStyle = "#e9b995";
+  ctx.fillRect(x+27,y+21,15,12);
+
+  // Голова
+  ctx.fillStyle = "#edbd99";
+  ctx.fillRect(x+17,y+3,35,27);
+
+  // Волосы: короткий blond wolf cut
+  ctx.fillStyle = "#e9d09a";
+  ctx.fillRect(x+12,y,43,12);
+  ctx.fillRect(x+9,y+6,12,14);
+  ctx.fillRect(x+45,y+4,10,15);
+  ctx.fillRect(x+20,y-3,8,7);
+  ctx.fillRect(x+34,y-2,8,7);
+
+  // Карие глаза
+  ctx.fillStyle = "#684027";
+  ctx.fillRect(x+24,y+15,5,5);
+  ctx.fillRect(x+41,y+15,5,5);
+
+  // Брови
+  ctx.fillStyle = "#80603a";
+  ctx.fillRect(x+23,y+12,8,2);
+  ctx.fillRect(x+40,y+12,8,2);
+
+  // Snake bites — два пирсинга нижней губы
+  ctx.fillStyle = "#171722";
+  ctx.fillRect(x+31,y+25,4,4);
+  ctx.fillRect(x+39,y+25,4,4);
+  ctx.fillStyle = "#d8d9e8";
+  ctx.fillRect(x+32,y+25,2,2);
+  ctx.fillRect(x+40,y+25,2,2);
+
+  // Руки
+  ctx.fillStyle = "#edbd99";
+  ctx.fillRect(x-2,y+52,8,17);
+  ctx.fillRect(x+61,y+52,8,17);
+
+  // Имя босса
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 15px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText("САНЯ", x+33, y-13);
+
+  // Полоска здоровья
+  ctx.fillStyle = "#17152d";
+  ctx.fillRect(x-15,y-8,96,8);
+  ctx.fillStyle = "#ff477e";
+  ctx.fillRect(x-14,y-7,94*(boss.hp/boss.maxHp),6);
+}
+
+function draw() {
+  // Ночное небо
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,"#19183f");
+  sky.addColorStop(1,"#514b91");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0,0,W,H);
+
+  // Звёзды
+  for (let i=0;i<45;i++) {
+    const x = (i*173+40)%W, y=(i*67+15)%260;
+    ctx.fillStyle = i%3===0 ? "#c7c0ff" : "#fff";
+    ctx.fillRect(x,y,2,2);
+  }
+
+  // Луна
+  ctx.fillStyle = "#d9d0ff";
+  ctx.beginPath(); ctx.arc(790,65,28,0,Math.PI*2); ctx.fill();
+
+  // Дальние горы
+  ctx.fillStyle = "#343766";
+  for(let i=0;i<8;i++){
+    ctx.beginPath();
+    ctx.moveTo(i*135-40,340);
+    ctx.lineTo(i*135+35,130+(i%3)*35);
+    ctx.lineTo(i*135+115,340);
+    ctx.fill();
+  }
+
+  // Платформы
+  for(const p of platforms){
+    ctx.fillStyle = "#554c98";
+    ctx.fillRect(p.x,p.y,p.w,p.h);
+    ctx.fillStyle = "#b9f3ff";
+    ctx.fillRect(p.x,p.y,p.w,6);
+    ctx.fillStyle = "#83d7f2";
+    ctx.fillRect(p.x,p.y+6,p.w,4);
+  }
+
+  // Рыбки
+  for(const f of fish){
+    if(f.taken) continue;
+    ctx.fillStyle = "#ffcb68";
+    ctx.beginPath(); ctx.ellipse(f.x,f.y,11,7,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(f.x-10,f.y);
+    ctx.lineTo(f.x-17,f.y-6);
+    ctx.lineTo(f.x-17,f.y+6);
+    ctx.fill();
+    ctx.fillStyle = "#34305c";
+    ctx.fillRect(f.x+3,f.y-2,2,2);
+    ctx.fillStyle = "#fff0ac";
+    ctx.fillRect(f.x-3,f.y-4,4,2);
+  }
+
+  // Снаряды-рыбки
+  for(const s of shots){
+    ctx.fillStyle = "#72e8ff";
+    ctx.beginPath(); ctx.ellipse(s.x,s.y,12,7,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(s.x+3,s.y-3,3,3);
+  }
+
+  // Саня появляется после 5 рыбок
+  if(boss.active) drawSanya();
+
+  // Кот мигает после получения урона
+  if(invincible===0 || Math.floor(frame/5)%2===0) {
+    drawCat(player.x,player.y);
+  }
+
+  // Подсказка в начале
+  if(!boss.active && score<5){
+    ctx.fillStyle="#17152dcc";
+    ctx.fillRect(220,20,460,38);
+    ctx.fillStyle="#fff";
+    ctx.font="16px Arial";
+    ctx.textAlign="center";
+    ctx.fillText("Собирай рыбок! Найди все платформы 🐟",450,44);
+  }
+
+  if(messageTime>0){
+    ctx.fillStyle="#17152dee";
+    ctx.fillRect(170,90,560,42);
+    ctx.fillStyle="#fff";
+    ctx.font="bold 17px Arial";
+    ctx.textAlign="center";
+    ctx.fillText(message,450,116);
+  }
+
+  if(mode==="win" || mode==="lose"){
+    ctx.fillStyle="#11102be8";
+    ctx.fillRect(170,140,560,190);
+    ctx.strokeStyle="#a99aff";
+    ctx.lineWidth=3;
+    ctx.strokeRect(170,140,560,190);
+    ctx.fillStyle=mode==="win"?"#a9ffd7":"#ff9bb9";
+    ctx.font="bold 32px Arial";
+    ctx.textAlign="center";
+    ctx.fillText(mode==="win"?"ПОБЕДА! 🎉":"ИГРА ОКОНЧЕНА",450,195);
+    ctx.fillStyle="#fff";
+    ctx.font="20px Arial";
+    ctx.fillText(mode==="win"?"Chillibon победил Саню!":"Котику нужно отдохнуть...",450,235);
+    ctx.font="16px Arial";
+    ctx.fillText("Нажми «Начать заново» ниже",450,275);
+    ctx.fillText("Рыбок собрано: "+score+" · Уровень: "+level,450,305);
+  }
+}
+
+function loop(){
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+restart();
+loop();
+</script>
+</body>
+</html>
